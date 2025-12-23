@@ -4,6 +4,7 @@
 
 package frc.robot;
 
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
@@ -28,6 +29,15 @@ public class Robot extends TimedRobot {
     m_robotContainer = new RobotContainer();
   }
 
+  /** This function is called once when the robot is first started up. */
+  @Override
+  public void robotInit() {
+    // Suppress joystick unplugged warnings during initialization
+    // This is a known issue with PS5 controllers where Driver Station
+    // may check button availability before the controller is fully ready
+    DriverStation.silenceJoystickConnectionWarning(true);
+  }
+
   /**
    * This function is called every 20 ms, no matter the mode. Use this for items like diagnostics
    * that you want ran during disabled, autonomous, teleoperated and test.
@@ -42,6 +52,9 @@ public class Robot extends TimedRobot {
     // and running subsystem periodic() methods.  This must be called from the robot's periodic
     // block in order for anything in the Command-based framework to work.
     CommandScheduler.getInstance().run();
+    
+    // Update controller debugging information
+    m_robotContainer.updateControllerDebug();
   }
 
   /** This function is called once each time the robot enters Disabled mode. */
@@ -68,13 +81,19 @@ public class Robot extends TimedRobot {
 
   @Override
   public void teleopInit() {
+    System.out.println("[Robot] teleopInit() called");
+    
     // This makes sure that the autonomous stops running when
     // teleop starts running. If you want the autonomous to
     // continue until interrupted by another command, remove
     // this line or comment it out.
     if (m_autonomousCommand != null) {
+      System.out.println("[Robot] Cancelling autonomous command");
       m_autonomousCommand.cancel();
     }
+    
+    // The default command (arcade drive) will automatically start running
+    // since it's set as the default command for the drivetrain subsystem
   }
 
   /** This function is called periodically during operator control. */

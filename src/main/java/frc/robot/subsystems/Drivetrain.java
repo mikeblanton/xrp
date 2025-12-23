@@ -8,6 +8,7 @@ import edu.wpi.first.util.sendable.SendableRegistry;
 import edu.wpi.first.wpilibj.BuiltInAccelerometer;
 import edu.wpi.first.wpilibj.Encoder;
 import edu.wpi.first.wpilibj.drive.DifferentialDrive;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj.xrp.XRPGyro;
 import edu.wpi.first.wpilibj.xrp.XRPMotor;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
@@ -145,6 +146,17 @@ public class Drivetrain extends SubsystemBase {
 
   @Override
   public void periodic() {
-    // This method will be called once per scheduler run
+    // Update SmartDashboard with debugging information
+    SmartDashboard.putNumber("Drivetrain/Left Encoder Count", getLeftEncoderCount());
+    SmartDashboard.putNumber("Drivetrain/Right Encoder Count", getRightEncoderCount());
+    SmartDashboard.putNumber("Drivetrain/Left Distance (in)", getLeftDistanceInch());
+    SmartDashboard.putNumber("Drivetrain/Right Distance (in)", getRightDistanceInch());
+    SmartDashboard.putNumber("Drivetrain/Average Distance (in)", getAverageDistanceInch());
+    SmartDashboard.putNumber("Drivetrain/Gyro Angle X", getGyroAngleX());
+    SmartDashboard.putNumber("Drivetrain/Gyro Angle Y", getGyroAngleY());
+    SmartDashboard.putNumber("Drivetrain/Gyro Angle Z", getGyroAngleZ());
+    SmartDashboard.putNumber("Drivetrain/Accel X (G)", getAccelX());
+    SmartDashboard.putNumber("Drivetrain/Accel Y (G)", getAccelY());
+    SmartDashboard.putNumber("Drivetrain/Accel Z (G)", getAccelZ());
   }
 }

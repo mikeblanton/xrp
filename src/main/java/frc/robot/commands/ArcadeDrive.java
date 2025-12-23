@@ -5,6 +5,7 @@
 package frc.robot.commands;
 
 import frc.robot.subsystems.Drivetrain;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import java.util.function.Supplier;
 
@@ -38,12 +39,22 @@ public class ArcadeDrive extends Command {
   // Called every time the scheduler runs while the command is scheduled.
   @Override
   public void execute() {
-    m_drivetrain.arcadeDrive(m_xaxisSpeedSupplier.get(), m_zaxisRotateSupplier.get());
+    double speed = m_xaxisSpeedSupplier.get();
+    double rotation = m_zaxisRotateSupplier.get();
+    
+    // Debug output
+    SmartDashboard.putNumber("ArcadeDrive/Speed", speed);
+    SmartDashboard.putNumber("ArcadeDrive/Rotation", rotation);
+    SmartDashboard.putBoolean("ArcadeDrive/Is Running", true);
+    
+    m_drivetrain.arcadeDrive(speed, rotation);
   }
 
   // Called once the command ends or is interrupted.
   @Override
-  public void end(boolean interrupted) {}
+  public void end(boolean interrupted) {
+    SmartDashboard.putBoolean("ArcadeDrive/Is Running", false);
+  }
 
   // Returns true when the command should end.
   @Override
