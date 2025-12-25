@@ -16,4 +16,10 @@ public final class Constants {
   public static class OperatorConstants {
     public static final int kDriverControllerPort = 0;
   }
+
+  public static class Vision {
+    public static final String kCameraName = "Arducam_OV9281_USB_Camera";
+    public static final double kVisionTurnkP = 1; // Increased from 0.01 for stronger rotation
+    public static final double kVisionMinRotation = 0.15; // Minimum rotation to overcome friction/deadband
+  }
 }

@@ -4,9 +4,9 @@
 
 package frc.robot;
 
-import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.GenericHID;
 import edu.wpi.first.wpilibj.PS5Controller;
+import frc.robot.Constants;
 import frc.robot.commands.ArcadeDrive;
 import frc.robot.commands.AutonomousDistance;
 import frc.robot.commands.AutonomousTime;
@@ -20,6 +20,7 @@ import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.PrintCommand;
 import edu.wpi.first.wpilibj2.command.button.Trigger;
+import org.photonvision.PhotonCamera;
 
 /**
  * This class is where the bulk of the robot should be declared. Since Command-based is a
@@ -35,6 +36,12 @@ public class RobotContainer {
 
   // PS5 controller plugged into channel 0
   private final PS5Controller m_controller = new PS5Controller(0);
+
+  // PhotonVision camera
+  // Note: You may see errors/warnings in the console if PhotonVision isn't connected yet.
+  // These are expected and won't prevent the robot from driving normally.
+  // The errors will disappear once PhotonVision is properly connected and running.
+  private final PhotonCamera m_camera = new PhotonCamera(Constants.Vision.kCameraName);
 
   // Create SmartDashboard chooser for autonomous routines
   private final SendableChooser<Command> m_chooser = new SendableChooser<>();
@@ -128,7 +135,9 @@ public class RobotContainer {
           rotation = applyDeadband(rotation, 0.1);
           rotation = squareInput(rotation);
           return rotation;
-        });
+        },
+        m_camera,
+        m_controller);
   }
 
   /**
