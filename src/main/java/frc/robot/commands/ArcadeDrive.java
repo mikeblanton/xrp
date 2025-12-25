@@ -21,6 +21,11 @@ public class ArcadeDrive extends Command {
   
   // Track previous triangle button state to detect presses/releases
   private boolean m_previousTriangleButtonState = false;
+  
+  // Track target angle for smooth rotation
+  private Double m_targetAngle = null; // null means not actively aligning
+  private boolean m_isAligning = false;
+  private double m_previousAngleError = 0.0; // For derivative term calculation
 
   /**
    * Creates a new ArcadeDrive. This command will drive your robot according to the speed supplier
@@ -98,24 +103,77 @@ public class ArcadeDrive extends Command {
     }
     m_previousTriangleButtonState = triangleButtonPressed;
     
-    // Auto-align when triangle button is pressed AND target is visible
-    // Only override rotation if both conditions are met
-    if (triangleButtonPressed && targetVisible) {
-      // Driver wants auto-alignment to target
-      // And, target is in sight, so we can turn toward it.
-      // Override the driver's turn command with an automatic one that turns toward the tag.
-      rotation = -1.0 * targetYaw * Constants.Vision.kVisionTurnkP;
-      
-      // Apply minimum rotation threshold to overcome friction/deadband
-      if (Math.abs(rotation) > 0 && Math.abs(rotation) < Constants.Vision.kVisionMinRotation) {
-        rotation = Math.copySign(Constants.Vision.kVisionMinRotation, rotation);
+    // Auto-align when triangle button is pressed
+    // Use smooth rotation based on target angle
+    if (triangleButtonPressed) {
+      // When first starting alignment AND target is visible, calculate the target angle
+      if (!m_isAligning && targetVisible) {
+        double currentAngle = m_drivetrain.getGyroAngleZ();
+        // targetYaw is the angle from camera center to target
+        // We want to rotate to align with the target, so target angle = current angle - targetYaw
+        m_targetAngle = currentAngle - targetYaw;
+        m_isAligning = true;
+        m_previousAngleError = 0.0; // Reset derivative term
+        System.out.println("[ArcadeDrive] Starting alignment: currentAngle=" + currentAngle + 
+                          ", targetYaw=" + targetYaw + ", targetAngle=" + m_targetAngle);
       }
       
-      // Clamp rotation to valid range [-1.0, 1.0]
-      rotation = Math.max(-1.0, Math.min(1.0, rotation));
-      System.out.println("[ArcadeDrive] Auto-aligning: targetYaw=" + targetYaw + ", rotation=" + rotation);
+      // If we're actively aligning, continue rotating toward target angle
+      if (m_isAligning && m_targetAngle != null) {
+        // Calculate rotation based on error from target angle
+        double currentAngle = m_drivetrain.getGyroAngleZ();
+        double angleError = m_targetAngle - currentAngle;
+        
+        // Normalize angle error to [-180, 180] range
+        while (angleError > 180) angleError -= 360;
+        while (angleError < -180) angleError += 360;
+        
+        // If we're close enough, stop rotating
+        if (Math.abs(angleError) <= Constants.Vision.kVisionAngleTolerance) {
+          rotation = 0.0;
+          m_previousAngleError = 0.0; // Reset derivative term
+          System.out.println("[ArcadeDrive] Aligned! angleError=" + angleError);
+        } else {
+          // Calculate derivative term (rate of change of error)
+          // This helps dampen oscillations by reducing rotation as we approach the target
+          double errorDerivative = angleError - m_previousAngleError;
+          
+          // PD Controller: P term + D term
+          double pTerm = angleError * Constants.Vision.kVisionTurnkP;
+          double dTerm = errorDerivative * Constants.Vision.kVisionTurnkD;
+          rotation = pTerm + dTerm;
+          
+          // Clamp to max rotation speed for smooth movement
+          rotation = Math.max(-Constants.Vision.kVisionMaxRotation, 
+                             Math.min(Constants.Vision.kVisionMaxRotation, rotation));
+          
+          // Apply minimum rotation threshold to overcome friction/deadband
+          // Only apply if we're not already very close to the target
+          if (Math.abs(angleError) > Constants.Vision.kVisionAngleTolerance * 2) {
+            if (Math.abs(rotation) > 0 && Math.abs(rotation) < Constants.Vision.kVisionMinRotation) {
+              rotation = Math.copySign(Constants.Vision.kVisionMinRotation, rotation);
+            }
+          }
+          
+          // Store current error for next iteration's derivative calculation
+          m_previousAngleError = angleError;
+        }
+        
+        SmartDashboard.putNumber("Vision/Target Angle", m_targetAngle);
+        SmartDashboard.putNumber("Vision/Current Angle", currentAngle);
+        SmartDashboard.putNumber("Vision/Angle Error", angleError);
+      }
+      // If button is pressed but we don't have a target yet, use normal rotation
+    } else {
+      // Button not pressed - reset alignment state
+      if (m_isAligning) {
+        m_targetAngle = null;
+        m_isAligning = false;
+        m_previousAngleError = 0.0;
+        System.out.println("[ArcadeDrive] Stopped alignment");
+      }
+      // Use the normal rotation from the joystick (m_zaxisRotateSupplier)
     }
-    // Otherwise, use the normal rotation from the joystick (m_zaxisRotateSupplier)
     
     // Debug output
     SmartDashboard.putNumber("ArcadeDrive/Speed", speed);
@@ -124,6 +182,7 @@ public class ArcadeDrive extends Command {
     SmartDashboard.putBoolean("ArcadeDrive/Triangle Button", triangleButtonPressed);
     SmartDashboard.putBoolean("Vision/Target Visible", targetVisible);
     SmartDashboard.putNumber("Vision/Target Yaw", targetYaw);
+    SmartDashboard.putBoolean("Vision/Is Aligning", m_isAligning);
     
     m_drivetrain.arcadeDrive(speed, rotation);
   }

@@ -19,7 +19,10 @@ public final class Constants {
 
   public static class Vision {
     public static final String kCameraName = "Arducam_OV9281_USB_Camera";
-    public static final double kVisionTurnkP = 1; // Increased from 0.01 for stronger rotation
-    public static final double kVisionMinRotation = 0.15; // Minimum rotation to overcome friction/deadband
+    public static final double kVisionTurnkP = 0.18; // Proportional gain for smooth rotation
+    public static final double kVisionTurnkD = 0.04; // Derivative gain to dampen oscillations
+    public static final double kVisionMaxRotation = 0.9; // Maximum rotation speed for smooth movement
+    public static final double kVisionMinRotation = 0.25; // Minimum rotation to overcome friction/deadband
+    public static final double kVisionAngleTolerance = 2.0; // Degrees - stop rotating when within this tolerance
   }
 }
