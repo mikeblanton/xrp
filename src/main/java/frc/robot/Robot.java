@@ -106,6 +106,12 @@ public class Robot extends TimedRobot {
     // block in order for anything in the Command-based framework to work.
     CommandScheduler.getInstance().run();
     
+    // Update vision pose estimation
+    m_robotContainer.getVision().updatePoseEstimation(m_robotContainer.getDrivetrain());
+    
+    // Update vision field visualization
+    m_robotContainer.getVision().updateVisionField();
+    
     // Periodically check NetworkTables connection status
     checkNetworkTablesStatus();
   }

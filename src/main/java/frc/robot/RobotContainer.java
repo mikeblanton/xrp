@@ -4,6 +4,9 @@
 
 package frc.robot;
 
+import edu.wpi.first.math.controller.RamseteController;
+import edu.wpi.first.math.controller.SimpleMotorFeedforward;
+import edu.wpi.first.math.kinematics.DifferentialDriveKinematics;
 import edu.wpi.first.wpilibj.GenericHID;
 import edu.wpi.first.wpilibj.PS5Controller;
 import frc.robot.Constants;
@@ -11,8 +14,12 @@ import frc.robot.commands.ArcadeDrive;
 import frc.robot.commands.AutonomousDistance;
 import frc.robot.commands.AutonomousTime;
 import frc.robot.commands.DriveForward;
+import frc.robot.commands.NavigateToAlgaeScoring;
+import frc.robot.commands.NavigateToLeftOfTarget;
+import frc.robot.commands.NavigateToRightOfTarget;
 import frc.robot.subsystems.Arm;
 import frc.robot.subsystems.Drivetrain;
+import frc.robot.subsystems.Vision;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj.xrp.XRPOnBoardIO;
@@ -21,6 +28,8 @@ import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.PrintCommand;
 import edu.wpi.first.wpilibj2.command.button.Trigger;
 import org.photonvision.PhotonCamera;
+import com.pathplanner.lib.auto.AutoBuilder;
+import com.pathplanner.lib.config.PIDConstants;
 
 /**
  * This class is where the bulk of the robot should be declared. Since Command-based is a
@@ -43,13 +52,31 @@ public class RobotContainer {
   // The errors will disappear once PhotonVision is properly connected and running.
   private final PhotonCamera m_camera = new PhotonCamera(Constants.Vision.kCameraName);
 
+  // Vision subsystem for AprilTag detection and pose estimation
+  private final Vision m_vision = new Vision(m_drivetrain::getPose, m_drivetrain.getField());
+
   // Create SmartDashboard chooser for autonomous routines
   private final SendableChooser<Command> m_chooser = new SendableChooser<>();
 
   /** The container for the robot. Contains subsystems, OI devices, and commands. */
   public RobotContainer() {
+    // Configure PathPlanner AutoBuilder for differential drive
+    configurePathPlanner();
+    
     // Configure the button bindings
     configureButtonBindings();
+  }
+
+  /**
+   * Configure PathPlanner AutoBuilder for differential drive pathfinding.
+   * Note: AutoBuilder configuration may vary by PathPlanner version.
+   * If this fails, pathfinding will use a fallback approach.
+   */
+  private void configurePathPlanner() {
+    // PathPlanner AutoBuilder configuration
+    // For now, we'll use PathPlanner's pathfinding API directly in commands
+    // AutoBuilder can be configured here if needed for specific PathPlanner versions
+    System.out.println("[RobotContainer] PathPlanner will be used for dynamic pathfinding");
   }
 
   /**
@@ -68,10 +95,20 @@ public class RobotContainer {
         .onTrue(new PrintCommand("USER Button Pressed"))
         .onFalse(new PrintCommand("USER Button Released"));
 
+    // Button mappings for vision navigation:
+    // Square: Navigate to left of target
     Trigger squareButton = new Trigger(m_controller::getSquareButton);
-    squareButton
-        .onTrue(new InstantCommand(() -> m_arm.setAngle(45.0), m_arm))
-        .onFalse(new InstantCommand(() -> m_arm.setAngle(0.0), m_arm));
+    squareButton.whileTrue(new NavigateToLeftOfTarget(m_drivetrain, m_vision));
+
+    // Circle: Navigate to right of target
+    Trigger circleButton = new Trigger(m_controller::getCircleButton);
+    circleButton.whileTrue(new NavigateToRightOfTarget(m_drivetrain, m_vision));
+
+    // X: Navigate to algae scoring position
+    Trigger xButton = new Trigger(m_controller::getCrossButton);
+    xButton.whileTrue(new NavigateToAlgaeScoring(m_drivetrain, m_vision));
+
+    // Triangle: Point at target (handled in ArcadeDrive command - leave as is)
 
     // Setup SmartDashboard options
     m_chooser.setDefaultOption("Auto Routine Distance", new AutonomousDistance(m_drivetrain));
@@ -138,6 +175,24 @@ public class RobotContainer {
         },
         m_camera,
         m_controller);
+  }
+
+  /**
+   * Get the Vision subsystem.
+   * 
+   * @return The Vision subsystem
+   */
+  public Vision getVision() {
+    return m_vision;
+  }
+
+  /**
+   * Get the Drivetrain subsystem.
+   * 
+   * @return The Drivetrain subsystem
+   */
+  public Drivetrain getDrivetrain() {
+    return m_drivetrain;
   }
 
   /**
