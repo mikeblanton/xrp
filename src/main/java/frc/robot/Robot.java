@@ -10,6 +10,8 @@ import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * The methods in this class are called automatically corresponding to each mode, as described in
@@ -38,6 +40,11 @@ public class Robot extends TimedRobot {
     // This is a known issue with PS5 controllers where Driver Station
     // may check button availability before the controller is fully ready
     DriverStation.silenceJoystickConnectionWarning(true);
+    
+    // Suppress PhotonVision TimeSyncServer warnings
+    // These warnings are common in simulation and don't affect functionality
+    Logger photonVisionLogger = Logger.getLogger("org.photonvision");
+    photonVisionLogger.setLevel(Level.SEVERE); // Only show severe errors, suppress warnings
     
     // Option 1: NetworkTables server runs on Mac (automatically started by WPILib simulation)
     // The server is already running - logs show "NT: Listening on NT3 port 1735, NT4 port 5810"

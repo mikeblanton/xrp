@@ -15,6 +15,11 @@ import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.Constants;
 import frc.robot.subsystems.Drivetrain;
 import frc.robot.subsystems.Vision;
+import com.pathplanner.lib.path.PathConstraints;
+import com.pathplanner.lib.path.PathPlannerPath;
+import com.pathplanner.lib.path.PathPoint;
+import com.pathplanner.lib.path.GoalEndState;
+import com.pathplanner.lib.path.RotationTarget;
 
 /**
  * Command to navigate to the right side of a target AprilTag.
@@ -28,7 +33,12 @@ public class NavigateToRightOfTarget extends Command {
   private PIDController m_rotationController;
   
   private Pose2d m_targetPose = null;
+  private PathPlannerPath m_currentPath = null;
+  private double m_pathStartTime = 0.0;
+  private double m_lastPathGenerationTime = 0.0;
   private static final double kOffsetDistanceMeters = 0.5; // 50cm to the right of target
+  private static final double kStoppingDistanceMeters = Units.inchesToMeters(6.0); // Stop 6" before target
+  private static final double kPathRegenerationInterval = 0.5; // Regenerate path every 0.5 seconds
   
   /**
    * Creates a new NavigateToRightOfTarget command.
@@ -41,7 +51,7 @@ public class NavigateToRightOfTarget extends Command {
     m_vision = vision;
     addRequirements(drivetrain);
     
-    // Initialize PID controllers
+    // Initialize PID controllers for path following
     m_xController = new PIDController(
         Constants.PathPlanner.kTranslationkP,
         Constants.PathPlanner.kTranslationkI,
@@ -61,6 +71,9 @@ public class NavigateToRightOfTarget extends Command {
   public void initialize() {
     System.out.println("[NavigateToRightOfTarget] Initialized");
     m_targetPose = null;
+    m_currentPath = null;
+    m_pathStartTime = 0.0;
+    m_lastPathGenerationTime = 0.0;
   }
 
   @Override
@@ -71,51 +84,160 @@ public class NavigateToRightOfTarget extends Command {
     SmartDashboard.putBoolean("NavigateToRight/Target Found", true);
     SmartDashboard.putNumber("NavigateToRight/Target ID", targetID);
     
-      try {
+    try {
       Pose2d tagPose = Vision.getAprilTagPose(targetID, new Transform2d());
       Pose2d currentPose = m_drivetrain.getPose();
       
-      // Calculate target position (to the right of the AprilTag)
+      // Calculate target position (to the right of the AprilTag, accounting for stopping distance)
       // Right side is -Y in field coordinates (forward is +X)
-      Translation2d targetTranslation = tagPose.getTranslation().plus(
-          new Translation2d(0, -kOffsetDistanceMeters)); // Right side (negative Y)
+      Translation2d tagTranslation = tagPose.getTranslation();
+      Translation2d targetOffset = new Translation2d(0, -kOffsetDistanceMeters); // Right side (negative Y)
       
-      // Calculate desired heading - face toward the target position
-      Translation2d toTarget = targetTranslation.minus(currentPose.getTranslation());
-      Rotation2d desiredHeading = new Rotation2d(Math.atan2(toTarget.getY(), toTarget.getX()));
+      // Calculate the direction from tag to robot (to know how to back off)
+      Translation2d tagToRobot = currentPose.getTranslation().minus(tagTranslation);
+      double distanceToTag = tagToRobot.getNorm();
       
-      // Create target pose with desired heading
-      m_targetPose = new Pose2d(targetTranslation, desiredHeading);
+      // Calculate final target position: offset from tag, then back off by stopping distance
+      Translation2d finalTargetPosition;
+      if (distanceToTag > kStoppingDistanceMeters) {
+        // Start with tag position + offset (where we want to be relative to tag)
+        Translation2d offsetPosition = tagTranslation.plus(targetOffset);
+        
+        // Calculate direction from tag toward robot (for backing off)
+        Translation2d directionFromTagToRobot = tagToRobot.div(distanceToTag);
+        
+        // Move back from tag along the tag->robot direction by stopping distance
+        // This ensures we maintain the right offset while stopping short
+        finalTargetPosition = offsetPosition.minus(
+            directionFromTagToRobot.times(kStoppingDistanceMeters));
+      } else {
+        // Already close to tag, just use offset position
+        finalTargetPosition = tagTranslation.plus(targetOffset);
+      }
       
-      // Calculate error
-      Translation2d error = m_targetPose.getTranslation().minus(currentPose.getTranslation());
+      // Target pose: horizontally aligned (face forward)
+      m_targetPose = new Pose2d(finalTargetPosition, Rotation2d.fromDegrees(0));
       
-      // Calculate speeds
-      double xSpeed = m_xController.calculate(currentPose.getX(), m_targetPose.getX());
-      double ySpeed = m_yController.calculate(currentPose.getY(), m_targetPose.getY());
+      // Check if we need to generate a new path
+      boolean needsNewPath = false;
+      double currentTime = System.currentTimeMillis() / 1000.0;
       
-      // Convert to robot-relative speeds
-      Rotation2d robotAngle = currentPose.getRotation();
-      double speed = Math.cos(robotAngle.getRadians()) * xSpeed + Math.sin(robotAngle.getRadians()) * ySpeed;
+      if (m_currentPath == null || m_targetPose == null) {
+        needsNewPath = true;
+      } else {
+        // Check if target moved significantly
+        double targetMovement = m_targetPose.getTranslation()
+            .getDistance(tagPose.getTranslation().plus(targetOffset));
+        if (targetMovement > 0.2) { // 20cm threshold
+          needsNewPath = true;
+        }
+        
+        // Regenerate path periodically
+        if (currentTime - m_lastPathGenerationTime > kPathRegenerationInterval) {
+          needsNewPath = true;
+        }
+      }
       
-      // Rotation: face toward target, but with lower priority (scale down rotation gain)
-      double rotation = m_rotationController.calculate(
-          currentPose.getRotation().getRadians(),
-          m_targetPose.getRotation().getRadians()) * 0.5; // Reduce rotation priority
+      // Generate new path using PathPlanner
+      if (needsNewPath && m_targetPose != null) {
+        try {
+          PathConstraints constraints = new PathConstraints(
+              Constants.PathPlanner.kMaxSpeedMetersPerSecond,
+              Constants.PathPlanner.kMaxAccelerationMetersPerSecondSquared,
+              Constants.PathPlanner.kMaxAngularSpeedRadiansPerSecond,
+              Constants.PathPlanner.kMaxAngularAccelerationRadiansPerSecondSquared);
+          
+          // Create PathPlanner path from current pose to target pose
+          m_currentPath = PathPlannerPath.fromPathPoints(
+              java.util.List.of(
+                  new PathPoint(
+                      currentPose.getTranslation(),
+                      new RotationTarget(1.0, currentPose.getRotation())),
+                  new PathPoint(
+                      m_targetPose.getTranslation(),
+                      new RotationTarget(1.0, m_targetPose.getRotation()))
+              ),
+              constraints,
+              new GoalEndState(0.0, m_targetPose.getRotation()));
+          
+          m_pathStartTime = currentTime;
+          m_lastPathGenerationTime = currentTime;
+          
+          System.out.println("[NavigateToRight] Generated PathPlanner path to target at (" +
+              String.format("%.2f", m_targetPose.getX()) + ", " +
+              String.format("%.2f", m_targetPose.getY()) + ")");
+        } catch (Exception e) {
+          System.out.println("[NavigateToRight] Error generating path: " + e.getMessage());
+          e.printStackTrace();
+          m_currentPath = null;
+        }
+      }
       
-      // Apply power multiplier and clamp
-      speed *= Constants.PathPlanner.kPowerMultiplier;
-      rotation *= Constants.PathPlanner.kPowerMultiplier;
-      speed = Math.max(-1.0, Math.min(1.0, speed));
-      rotation = Math.max(-1.0, Math.min(1.0, rotation));
-      
-      m_drivetrain.arcadeDrive(speed, rotation);
-      
-      SmartDashboard.putNumber("NavigateToRight/Distance to Target", error.getNorm());
-      SmartDashboard.putNumber("NavigateToRight/X Error", error.getX());
-      SmartDashboard.putNumber("NavigateToRight/Y Error", error.getY());
+      // Follow the path - drive toward target using proper path calculation
+      if (m_currentPath != null && m_targetPose != null) {
+        // Calculate errors to target pose
+        double xError = m_targetPose.getX() - currentPose.getX();
+        double yError = m_targetPose.getY() - currentPose.getY();
+        
+        // Calculate angle to target in field coordinates
+        // atan2(y, x) gives angle: 0 = +X (forward), +PI/2 = +Y (left), -PI/2 = -Y (right)
+        double angleToTarget = Math.atan2(yError, xError);
+        double currentHeading = currentPose.getRotation().getRadians();
+        
+        // Calculate heading error (how much we need to turn)
+        double headingError = angleToTarget - currentHeading;
+        
+        // Normalize heading error to [-PI, PI]
+        while (headingError > Math.PI) headingError -= 2 * Math.PI;
+        while (headingError < -Math.PI) headingError += 2 * Math.PI;
+        
+        // Calculate distance to target
+        double distanceToTarget = Math.sqrt(xError * xError + yError * yError);
+        
+        // Forward speed: drive toward target
+        // Only drive forward if we're roughly facing the target direction (within 90 degrees)
+        double forwardSpeed = 0.0;
+        if (Math.abs(headingError) < Math.PI / 2) {
+          // Drive forward, speed proportional to distance and alignment
+          double alignmentFactor = Math.cos(headingError); // 1.0 when aligned, 0.0 when perpendicular
+          forwardSpeed = distanceToTarget * 0.8 * Math.max(0.3, alignmentFactor);
+          forwardSpeed = Math.max(0.3, Math.min(0.9, forwardSpeed));
+        } else {
+          // Too far off heading, don't drive forward, just turn
+          forwardSpeed = 0.0;
+        }
+        
+        // Rotation: turn toward target using PID
+        double rotationSpeed = m_rotationController.calculate(currentHeading, angleToTarget);
+        
+        // Clamp outputs
+        forwardSpeed = Math.max(-1.0, Math.min(1.0, forwardSpeed));
+        rotationSpeed = Math.max(-1.0, Math.min(1.0, rotationSpeed));
+        
+        // Debug output
+        System.out.println(String.format(
+            "[NavigateToRight] robot=(%.2f,%.2f,%.1f°) target=(%.2f,%.2f) " +
+            "xErr=%.2f yErr=%.2f angleToTarget=%.1f° headingErr=%.1f° fwd=%.2f rot=%.2f",
+            currentPose.getX(), currentPose.getY(), Math.toDegrees(currentHeading),
+            m_targetPose.getX(), m_targetPose.getY(),
+            xError, yError, Math.toDegrees(angleToTarget),
+            Math.toDegrees(headingError), forwardSpeed, rotationSpeed));
+        
+        m_drivetrain.arcadeDrive(forwardSpeed, rotationSpeed);
+        
+        SmartDashboard.putNumber("NavigateToRight/Distance to Target", distanceToTarget);
+        SmartDashboard.putNumber("NavigateToRight/X Error", xError);
+        SmartDashboard.putNumber("NavigateToRight/Y Error", yError);
+        SmartDashboard.putNumber("NavigateToRight/Heading Error (deg)", Math.toDegrees(headingError));
+        SmartDashboard.putNumber("NavigateToRight/Angle to Target (deg)", Math.toDegrees(angleToTarget));
+        SmartDashboard.putNumber("NavigateToRight/Current Heading (deg)", Math.toDegrees(currentHeading));
+      } else {
+        // No path, stop
+        m_drivetrain.arcadeDrive(0.0, 0.0);
+      }
     } catch (Exception e) {
-      System.out.println("[NavigateToRightOfTarget] Error calculating pose: " + e.getMessage());
+      System.out.println("[NavigateToRightOfTarget] Error: " + e.getMessage());
+      e.printStackTrace();
       m_drivetrain.arcadeDrive(0.0, 0.0);
     }
   }
@@ -134,10 +256,10 @@ public class NavigateToRightOfTarget extends Command {
     
     Pose2d currentPose = m_drivetrain.getPose();
     double distance = currentPose.getTranslation().getDistance(m_targetPose.getTranslation());
-    double angleError = Math.abs(currentPose.getRotation().minus(m_targetPose.getRotation()).getRadians());
+    double xError = Math.abs(currentPose.getX() - m_targetPose.getX());
     
-    // Finished when close enough to target
-    return distance < 0.15 && angleError < Units.degreesToRadians(5.0);
+    // Finished when: within stopping distance AND horizontally aligned
+    return distance < kStoppingDistanceMeters && xError < 0.05; // Within 5cm horizontally
   }
 }
 
