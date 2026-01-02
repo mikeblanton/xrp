@@ -54,7 +54,7 @@ public final class Constants {
     public static final double kPowerMultiplier = 2.0; // Multiply PID output by this for more power
     
     // Max speeds and accelerations (increased for more power)
-    public static final double kMaxSpeedMetersPerSecond = 200.0; // Increased from 0.5 - much more power
+    public static final double kMaxSpeedMetersPerSecond = 5.0; // Max speed set to 5
     public static final double kMaxAccelerationMetersPerSecondSquared = 2.0; // Increased from 0.5
     public static final double kMaxAngularSpeedRadiansPerSecond = Math.PI * 2; // Increased from Math.PI
     public static final double kMaxAngularAccelerationRadiansPerSecondSquared = Math.PI * 2; // Increased from Math.PI

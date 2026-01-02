@@ -294,7 +294,6 @@ public class NavigateToAlgaeScoring extends Command {
           // visionYaw: negative = target left of center, positive = target right of center
           // We want to turn toward the target, so negate yaw
           double visionRotation = -visionYaw * Constants.Vision.kVisionTurnkP;
-          visionRotation = Math.max(-1.0, Math.min(1.0, visionRotation));
           rotationSpeed = visionRotation;
         } else {
           // Use field-based navigation (coarse alignment)
@@ -302,10 +301,6 @@ public class NavigateToAlgaeScoring extends Command {
           // When headingError is negative (need to turn left), we want positive rotation
           rotationSpeed = -headingError * Constants.PathPlanner.kRotationkP;
         }
-        
-        // Clamp outputs to prevent excessive speeds
-        forwardSpeed = Math.max(-1.0, Math.min(1.0, forwardSpeed));
-        rotationSpeed = Math.max(-1.0, Math.min(1.0, rotationSpeed));
         
         // Safety check: if heading error is very large (>150°), log a warning
         // This might indicate a coordinate system issue or incorrect pose initialization

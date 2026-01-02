@@ -208,7 +208,6 @@ public class NavigateToLeftOfTarget extends Command {
           // Drive forward, speed proportional to distance and alignment
           double alignmentFactor = Math.cos(headingError); // 1.0 when aligned, 0.0 when perpendicular
           forwardSpeed = distanceToTarget * 0.8 * Math.max(0.3, alignmentFactor);
-          forwardSpeed = Math.max(0.3, Math.min(0.9, forwardSpeed));
         } else {
           // Too far off heading, don't drive forward, just turn
           forwardSpeed = 0.0;
@@ -216,10 +215,6 @@ public class NavigateToLeftOfTarget extends Command {
         
         // Rotation: turn toward target using PID
         double rotationSpeed = m_rotationController.calculate(currentHeading, angleToTarget);
-        
-        // Clamp outputs
-        forwardSpeed = Math.max(-1.0, Math.min(1.0, forwardSpeed));
-        rotationSpeed = Math.max(-1.0, Math.min(1.0, rotationSpeed));
         
         // Debug output
         System.out.println(String.format(

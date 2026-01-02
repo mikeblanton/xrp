@@ -180,10 +180,6 @@ public class PathPlannerToTarget extends Command {
     double motorSpeed = forwardSpeed * Constants.PathPlanner.kPowerMultiplier;
     double motorRotation = rotationSpeed * Constants.PathPlanner.kPowerMultiplier;
     
-    // Clamp to motor limits
-    motorSpeed = Math.max(-1.0, Math.min(1.0, motorSpeed));
-    motorRotation = Math.max(-1.0, Math.min(1.0, motorRotation));
-    
     m_drivetrain.arcadeDrive(motorSpeed, motorRotation);
   }
 
