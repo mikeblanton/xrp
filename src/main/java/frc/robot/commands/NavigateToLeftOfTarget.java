@@ -180,14 +180,14 @@ public class NavigateToLeftOfTarget extends Command {
         }
       }
       
-      // Follow the path - drive toward target using proper path calculation
+      // Follow the path using smooth path following
       if (m_currentPath != null && m_targetPose != null) {
         // Calculate errors to target pose
         double xError = m_targetPose.getX() - currentPose.getX();
         double yError = m_targetPose.getY() - currentPose.getY();
+        double distanceToTarget = Math.sqrt(xError * xError + yError * yError);
         
         // Calculate angle to target in field coordinates
-        // atan2(y, x) gives angle: 0 = +X (forward), +PI/2 = +Y (left), -PI/2 = -Y (right)
         double angleToTarget = Math.atan2(yError, xError);
         double currentHeading = currentPose.getRotation().getRadians();
         
@@ -198,23 +198,43 @@ public class NavigateToLeftOfTarget extends Command {
         while (headingError > Math.PI) headingError -= 2 * Math.PI;
         while (headingError < -Math.PI) headingError += 2 * Math.PI;
         
-        // Calculate distance to target
-        double distanceToTarget = Math.sqrt(xError * xError + yError * yError);
-        
-        // Forward speed: drive toward target
-        // Only drive forward if we're roughly facing the target direction (within 90 degrees)
+        // Forward speed: drive toward target with smooth deceleration
+        // Use PID controllers for smoother control
         double forwardSpeed = 0.0;
         if (Math.abs(headingError) < Math.PI / 2) {
-          // Drive forward, speed proportional to distance and alignment
-          double alignmentFactor = Math.cos(headingError); // 1.0 when aligned, 0.0 when perpendicular
-          forwardSpeed = distanceToTarget * 0.8 * Math.max(0.3, alignmentFactor);
+          // Drive forward, using PID for smooth control
+          // Calculate forward component based on heading alignment
+          double forwardError = Math.cos(headingError) * distanceToTarget;
+          forwardSpeed = m_xController.calculate(0.0, forwardError);
+          
+          // Scale down as we approach target for smooth stopping
+          double speedScale = Math.min(1.0, distanceToTarget / 0.5); // Scale down within 50cm
+          forwardSpeed *= speedScale;
+          
+          // Clamp forward speed
+          forwardSpeed = Math.max(-0.8, Math.min(0.8, forwardSpeed));
         } else {
           // Too far off heading, don't drive forward, just turn
           forwardSpeed = 0.0;
         }
         
-        // Rotation: turn toward target using PID
-        double rotationSpeed = m_rotationController.calculate(currentHeading, angleToTarget);
+        // Rotation: turn toward target using PID with reduced gain for smoother control
+        double rotationSpeed = 0.0;
+        double headingErrorDegrees = Math.toDegrees(headingError);
+        
+        if (Math.abs(headingErrorDegrees) > 2.0) { // Only rotate if error > 2 degrees
+          rotationSpeed = m_rotationController.calculate(currentHeading, angleToTarget);
+          
+          // Reduce rotation speed for smoother control (prevent wobbling)
+          rotationSpeed *= 0.5; // Reduce by 50% for smoother movement
+          
+          // Clamp rotation speed to prevent overshoot
+          rotationSpeed = Math.max(-0.6, Math.min(0.6, rotationSpeed));
+        } else {
+          // Close enough, stop rotating to prevent oscillation
+          rotationSpeed = 0.0;
+          m_rotationController.reset(); // Reset PID to prevent integral windup
+        }
         
         // Debug output
         System.out.println(String.format(
