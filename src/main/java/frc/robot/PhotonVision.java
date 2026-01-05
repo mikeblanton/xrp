@@ -117,7 +117,6 @@ public class PhotonVision extends CameraBase {
             targetVisible = true;
         }
         else {
-            System.out.println("skipping because result has no targets");
         }
       }
     }

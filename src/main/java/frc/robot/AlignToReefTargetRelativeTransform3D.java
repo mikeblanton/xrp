@@ -44,21 +44,21 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
   
   private int tagIDDesired;
 
-  // PID constants
-  private static final double X_REEF_ALIGNMENT_KP = 1.2; // Slightly increased for better response
-  private static final double X_REEF_ALIGNMENT_KI = 0.15; // Increased integral to eliminate steady-state error
-  private static final double Y_REEF_ALIGNMENT_KP = 1.;
-  private static final double Y_REEF_ALIGNMENT_KI = 0.1; // Integral term to eliminate steady-state error
-  private static final double ROT_REEF_ALIGNMENT_KP = 1.2; // Slightly increased for rotation
-  private static final double ROT_REEF_ALIGNMENT_KI = 0.15; // Increased integral to eliminate steady-state error
+  // PID constants - increased for more aggressive control
+  private static final double X_REEF_ALIGNMENT_KP = 2.0; // Increased for better response
+  private static final double X_REEF_ALIGNMENT_KI = 0.2; // Increased integral to eliminate steady-state error
+  private static final double Y_REEF_ALIGNMENT_KP = 1.5;
+  private static final double Y_REEF_ALIGNMENT_KI = 0.15; // Integral term to eliminate steady-state error
+  private static final double ROT_REEF_ALIGNMENT_KP = 2.0; // Increased for rotation
+  private static final double ROT_REEF_ALIGNMENT_KI = 0.2; // Increased integral to eliminate steady-state error
 
-  // Tighter tolerances - robot must be closer to target
-  private static final double X_TOLERANCE_REEF_ALIGNMENT = 0.05; // meters (5cm - tighter)
-  private static final double Y_TOLERANCE_REEF_ALIGNMENT = 0.05; // meters (5cm - tighter)
-  private static final double ROT_TOLERANCE_REEF_ALIGNMENT = Units.degreesToRadians(3.); // 3 degrees - tighter
+  // Tolerances - robot must be close to target
+  private static final double X_TOLERANCE_REEF_ALIGNMENT = 0.05; // meters (5cm)
+  private static final double Y_TOLERANCE_REEF_ALIGNMENT = 0.05; // meters (5cm)
+  private static final double ROT_TOLERANCE_REEF_ALIGNMENT = Units.degreesToRadians(3.); // 3 degrees
   
-  // Minimum output values to overcome friction and deadband
-  private static final double MIN_OUTPUT_THRESHOLD = 0.12; // Slightly increased to ensure movement
+  // Minimum output values to overcome friction and deadband - increased significantly
+  private static final double MIN_OUTPUT_THRESHOLD = 0.2; // Increased to ensure movement even with small errors
 
   private PIDController xController;
   private PIDController yController;
@@ -177,29 +177,66 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
     double baseRotValue = -rotController.calculate(pose.cameraToTarget.getRotation().getZ());
     
     // For differential drive, Y (lateral) error must be converted to rotation
-    // Add Y error correction to rotation: if tag is to the right (negative Y error),
-    // rotate right (positive rotation). Scale to avoid overwhelming rotation control.
-    // Use direct Y error instead of ySpeed for more stable control
-    double yErrorCorrection = yError * 0.3; // Convert Y error directly to rotation correction
-    rotValue = baseRotValue + yErrorCorrection;
+    // Y+ means tag is left of camera (from RobotPose comments)
+    // To center: if tag is left (Y+), rotate left to point at it
+    // Rotation: positive is CCW (left), negative is CW (right)
+    // So: if Y error is positive (tag left), we want positive rotation (rotate left)
+    //     if Y error is negative (tag right), we want negative rotation (rotate right)
+    double absYError = Math.abs(yError);
+    
+    // Convert Y error directly to rotation correction - simpler and more direct
+    // Scale Y error aggressively to ensure centering
+    double yErrorScale = 1.5; // Base scale for Y to rotation conversion
+    if (absYError > 0.15) {
+      yErrorScale = 2.5; // Very aggressive when off-center
+    }
+    if (absYError > 0.25) {
+      yErrorScale = 3.5; // Extremely aggressive when way off-center
+    }
+    
+    double yErrorCorrection = yError * yErrorScale;
+    
+    // Combine rotation PID with Y error correction
+    // Prioritize Y correction when Y error is significant
+    if (absYError > 0.1) {
+      // When Y error is significant, mostly use Y correction for centering
+      rotValue = yErrorCorrection * 0.9 + baseRotValue * 0.1;
+    } else {
+      // When Y error is small, combine both
+      rotValue = baseRotValue + yErrorCorrection * 0.5;
+    }
+    
+    // Only reduce forward speed when Y error is very large - allow more forward progress
+    if (absYError > 0.25) {
+      xSpeed *= 0.7; // Moderate reduction only when very off-center
+    } else if (absYError > 0.2) {
+      xSpeed *= 0.85; // Less reduction
+    }
     
     // Debug: log PID outputs before applying minimum threshold
-    System.out.println(String.format("PID outputs (before threshold): X=%.3f Y=%.3f Rot=%.3f (base=%.3f, Y-corr=%.3f) | At setpoint: X=%b Y=%b Rot=%b",
-        xSpeed, ySpeed, rotValue, baseRotValue, yErrorCorrection,
+    System.out.println(String.format("PID outputs (before threshold): X=%.3f Y=%.3f Rot=%.3f (base=%.3f, Y-corr=%.3f, Y-scale=%.2f) | At setpoint: X=%b Y=%b Rot=%b",
+        xSpeed, ySpeed, rotValue, baseRotValue, yErrorCorrection, yErrorScale,
         xController.atSetpoint(), yController.atSetpoint(), rotController.atSetpoint()));
     
     // Apply minimum threshold to overcome friction/deadband when error is significant
-    // Check actual errors, not just setpoint status, to keep driving when close but not quite there
-    if (Math.abs(xError) > X_TOLERANCE_REEF_ALIGNMENT && Math.abs(xSpeed) > 0 && Math.abs(xSpeed) < MIN_OUTPUT_THRESHOLD) {
-      xSpeed = Math.copySign(MIN_OUTPUT_THRESHOLD, xSpeed);
+    // Always apply minimum threshold if error exceeds tolerance, regardless of PID output size
+    // For X: apply threshold if error exceeds tolerance
+    if (Math.abs(xError) > X_TOLERANCE_REEF_ALIGNMENT) {
+      if (Math.abs(xSpeed) < MIN_OUTPUT_THRESHOLD) {
+        xSpeed = Math.copySign(MIN_OUTPUT_THRESHOLD, xSpeed);
+      }
     }
+    
     // Y speed is converted to rotation, so don't apply threshold here
-    // Check rotation error (accounting for wrap-around)
+    // For rotation: apply threshold if rotation error exceeds tolerance OR if Y error is significant
+    // (because rotation is used to center the tag)
     double absRotError = Math.abs(rotError);
     if (absRotError > Math.PI) {
       absRotError = 2 * Math.PI - absRotError;
     }
-    if (absRotError > ROT_TOLERANCE_REEF_ALIGNMENT && Math.abs(rotValue) > 0 && Math.abs(rotValue) < MIN_OUTPUT_THRESHOLD) {
+    // Apply minimum threshold if rotation error exceeds tolerance OR if we need to center (Y error > 0.05)
+    if ((absRotError > ROT_TOLERANCE_REEF_ALIGNMENT || absYError > 0.05) && 
+        Math.abs(rotValue) < MIN_OUTPUT_THRESHOLD) {
       rotValue = Math.copySign(MIN_OUTPUT_THRESHOLD, rotValue);
     }
     
