@@ -13,10 +13,12 @@ import frc.robot.commands.AutonomousTime;
 import frc.robot.commands.DriveForward;
 import frc.robot.subsystems.Arm;
 import frc.robot.subsystems.Drivetrain;
+import frc.robot.VisionContainer.VisionSelector;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj.xrp.XRPOnBoardIO;
 import edu.wpi.first.wpilibj2.command.Command;
+import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.PrintCommand;
 import edu.wpi.first.wpilibj2.command.button.Trigger;
@@ -29,7 +31,7 @@ import edu.wpi.first.wpilibj2.command.button.Trigger;
  */
 public class RobotContainer {
   // The robot's subsystems and commands are defined here...
-  private final Drivetrain m_drivetrain = new Drivetrain();
+  private static final Drivetrain m_drivetrain = new Drivetrain();
   private final XRPOnBoardIO m_onboardIO = new XRPOnBoardIO();
   private final Arm m_arm = new Arm();
 
@@ -39,8 +41,16 @@ public class RobotContainer {
   // Create SmartDashboard chooser for autonomous routines
   private final SendableChooser<Command> m_chooser = new SendableChooser<>();
 
+  // Vision container
+  private static VisionContainer visionContainer;
+
   /** The container for the robot. Contains subsystems, OI devices, and commands. */
   public RobotContainer() {
+    // Initialize vision system
+    var visionSelector = VisionSelector.usePhotonVision;
+    DriverStation.reportWarning("vision selection " + visionSelector, false);
+    visionContainer = new VisionContainer(visionSelector);
+
     // Configure the button bindings
     configureButtonBindings();
   }
@@ -65,6 +75,11 @@ public class RobotContainer {
     squareButton
         .onTrue(new InstantCommand(() -> m_arm.setAngle(45.0), m_arm))
         .onFalse(new InstantCommand(() -> m_arm.setAngle(0.0), m_arm));
+
+    // Vision alignment buttons
+    configXButton();
+    configCircleButton();
+    configTriangleButton();
 
     // Setup SmartDashboard options
     m_chooser.setDefaultOption("Auto Routine Distance", new AutonomousDistance(m_drivetrain));
@@ -140,5 +155,105 @@ public class RobotContainer {
     // Drive forward at speed 2 when X button is held
     // Note: Speed 2.0 is outside normal range (-1.0 to 1.0) but using as requested
     return new DriveForward(2.0, m_drivetrain);
+  }
+
+  /**
+   * activate 3d pose driving to target using camera coordinates
+   */
+  private void configXButton() {
+    Trigger xButton = new Trigger(m_controller::getCrossButton);
+    if (visionContainer != null && visionContainer.vision()) {
+      xButton.whileTrue(new AlignToReefTargetRelativeTransform3D(true, visionContainer, m_drivetrain));
+    } else {
+      xButton.whileTrue(Commands.print("No Vision").repeatedly());
+    }
+  }
+
+  /**
+   * activate 2-d pose driving to target (yaw and pitch)
+   */
+  private void configCircleButton() {
+    Trigger circleButton = new Trigger(m_controller::getCircleButton);
+    if (visionContainer != null && visionContainer.vision()) {
+      circleButton.whileTrue(new AlignToReefTagRelativeArcade2D(visionContainer, m_drivetrain));
+    } else {
+      circleButton.whileTrue(Commands.print("No Vision").repeatedly());
+    }
+  }
+
+  /**
+   * activate 3d pose driving to target using field coordinates
+   */
+  private void configTriangleButton() {
+    Trigger triangleButton = new Trigger(m_controller::getTriangleButton);
+    if (visionContainer != null && visionContainer.vision()) {
+      triangleButton.whileTrue(new AlignToReefFieldRelativePose3D(true, visionContainer, m_drivetrain));
+    } else {
+      triangleButton.whileTrue(Commands.print("No Vision").repeatedly());
+    }
+  }
+
+  /**
+   * useful if commands are organized in a different file than where VisionContainer is instantiated
+   * @return an existing instance of VisionContainer
+   */
+  public static VisionContainer getVisionContainer() {
+    return visionContainer;
+  }
+
+  /**
+   * 
+   * @return an existing instance of Drivetrain
+   */
+  public static Drivetrain getDrivetrain() {
+    return m_drivetrain;
+  }
+
+  /**
+   * {@link Robot#robotPeriodic()} will call this method before the command scheduler and this
+   * method runs all the rest of the methods that must be run before the command scheduler
+   */
+  public static void runBeforeCommands() {
+    if (visionContainer != null) {
+      visionContainer.update();
+    }
+  }
+
+  /**
+   * Enumerate all the network interfaces
+   */
+  public static String whatsMyIPAddress() {
+    StringBuilder sb = new StringBuilder();
+    try {
+      // Get an enumeration of all network interfaces
+      java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
+      
+      // Iterate over each network interface
+      while (interfaces.hasMoreElements()) {
+        java.net.NetworkInterface networkInterface = interfaces.nextElement();
+        
+        // Skip loopback interfaces and interfaces that are down (optional but recommended)
+        if (networkInterface.isLoopback() || !networkInterface.isUp()) {
+          continue;
+        }
+
+        sb.append("Interface: " + networkInterface.getDisplayName() + "\n");
+
+        // Get an enumeration of all IP addresses bound to this interface
+        java.util.Enumeration<java.net.InetAddress> addresses = networkInterface.getInetAddresses();
+        
+        // Iterate over each IP address
+        while (addresses.hasMoreElements()) {
+          java.net.InetAddress address = addresses.nextElement();
+          
+          // You can add further filtering here if needed (e.g., only IPv4 or IPv6)
+          sb.append("  IP Address: " + address.getHostAddress() + "\n");
+        }
+      }
+    } catch (java.net.SocketException e) {
+      sb.append("\nError retrieving network interface list: " + e.getMessage() + "\n");
+    }
+
+    return sb.toString();
   }
 }

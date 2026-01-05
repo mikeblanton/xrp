@@ -4,6 +4,7 @@
 
 package frc.robot.subsystems;
 
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.util.sendable.SendableRegistry;
 import edu.wpi.first.wpilibj.BuiltInAccelerometer;
 import edu.wpi.first.wpilibj.Encoder;
@@ -58,6 +59,29 @@ public class Drivetrain extends SubsystemBase {
 
   public void arcadeDrive(double xaxisSpeed, double zaxisRotate) {
     m_diffDrive.arcadeDrive(xaxisSpeed, zaxisRotate);
+  }
+
+  public void arcadeDrive(double xaxisSpeed, double zaxisRotate, boolean squareInputs) {
+    m_diffDrive.arcadeDrive(xaxisSpeed, zaxisRotate, squareInputs);
+  }
+
+  /**
+   * Drive using ChassisSpeeds. For differential drive, converts to arcade drive.
+   * Y component (strafe) is ignored as differential drives cannot strafe.
+   * 
+   * @param chassisSpeeds the desired robot chassis speed
+   */
+  public void driveRobotRelative(ChassisSpeeds chassisSpeeds) {
+    // Convert ChassisSpeeds to arcade drive for differential drivetrain
+    // Normalize to reasonable range (-1 to 1) - adjust max speeds as needed
+    double maxLinearSpeed = 1.0; // m/s - adjust based on robot capabilities
+    double maxAngularSpeed = Math.PI; // rad/s - adjust based on robot capabilities
+    
+    double forwardSpeed = Math.max(-1.0, Math.min(1.0, chassisSpeeds.vxMetersPerSecond / maxLinearSpeed));
+    double rotationSpeed = Math.max(-1.0, Math.min(1.0, chassisSpeeds.omegaRadiansPerSecond / maxAngularSpeed));
+    
+    // Use arcade drive with square inputs disabled for vision control
+    arcadeDrive(forwardSpeed, rotationSpeed, false);
   }
 
   public void resetEncoders() {
@@ -142,6 +166,24 @@ public class Drivetrain extends SubsystemBase {
   /** Reset the gyro. */
   public void resetGyro() {
     m_gyro.reset();
+  }
+
+  /**
+   * Get the robot heading from the gyro.
+   * @return The current heading in degrees
+   */
+  public double getHeading() {
+    return getGyroAngleZ();
+  }
+
+  /**
+   * Get the robot rotation rate from the gyro.
+   * @return The current rotation rate in degrees per second
+   */
+  public double getRate() {
+    // XRPGyro doesn't have getRate(), so return 0 or calculate from angle changes
+    // For now, return 0 as a placeholder
+    return 0.0;
   }
 
   @Override
