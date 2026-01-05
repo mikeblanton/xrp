@@ -32,8 +32,9 @@ public class AlignToReefTagRelativeArcade2D extends Command {
 
     // need to know what target is seen to know target height from floor for distance calculation and where scoring is relative to it
     private int tagIDDesired = 1; // FIXME need dynamic determination of the tag to use
-    private double targetHeight = AprilTagsLocations.getTagLocation(tagIDDesired).getZ(); // for distance calculation
-    private double scoringDistance = 0.6; // stop a little before the tag; parallel to the floor in meters
+    // Tag height: 6 inches = 0.1524 meters (custom setup - tags are always 6" off the ground)
+    private double targetHeight = Units.inchesToMeters(6.0); // for distance calculation
+    private double scoringDistance = 0.75; // stop 0.75m before the tag; parallel to the floor in meters
     private double scoringAngle = Units.degreesToRadians(5.); // point slightly left of tag - radians
 
     private double cameraHeight;
@@ -41,12 +42,17 @@ public class AlignToReefTagRelativeArcade2D extends Command {
 
     private final VisionContainer visionContainer;
 
-    // PID constants
-    public static final double DISTANCE_REEF_ALIGNMENT_KP = 1.;
-    public static final double ROT_REEF_ALIGNMENT_KP = 1.;
+    // PID constants - increased for more aggressive control
+    public static final double DISTANCE_REEF_ALIGNMENT_KP = 1.5; // Increased for better response
+    public static final double DISTANCE_REEF_ALIGNMENT_KI = 0.2; // Increased integral to eliminate steady-state error
+    public static final double ROT_REEF_ALIGNMENT_KP = 1.5; // Increased for rotation
+    public static final double ROT_REEF_ALIGNMENT_KI = 0.2; // Increased integral to eliminate steady-state error
 
     public static final double DISTANCE_TOLERANCE_REEF_ALIGNMENT = 0.06; // meters
     public static final double ROT_TOLERANCE_REEF_ALIGNMENT = Units.degreesToRadians(3.);
+    
+    // Minimum output values to overcome friction and deadband - increased for better motor response
+    private static final double MIN_OUTPUT_THRESHOLD = 0.25; // Increased to ensure movement
 
     private PIDController distanceController;
     private PIDController rotController;
@@ -59,10 +65,16 @@ public class AlignToReefTagRelativeArcade2D extends Command {
 
     private Timer dontSeeTagTimer;
     private Timer holdPoseValidationTimer;
+    private boolean wasAtSetpoint; // Track previous setpoint state to reset timer on transition
 
     private boolean bail;
     private double distanceSpeed;
     private double rotSpeed;
+    
+    // Store last known good pose to continue briefly when tag is lost
+    private RobotPose lastKnownPose;
+    private Timer lastPoseTimer;
+    private static final double LAST_POSE_TIMEOUT = 0.5; // Continue using last pose for 0.5 seconds
 
     private Drivetrain drivetrain;
 
@@ -76,14 +88,16 @@ public class AlignToReefTagRelativeArcade2D extends Command {
 
         // System.out.println("info " + target + " " + AprilTagsLocations.getTagLocation(10) + " " + targetBranch + " end info");
     
-        distanceController = new PIDController(DISTANCE_REEF_ALIGNMENT_KP, 0.0, 0); // +forward/-back translation
+        distanceController = new PIDController(DISTANCE_REEF_ALIGNMENT_KP, DISTANCE_REEF_ALIGNMENT_KI, 0); // +forward/-back translation
         distanceController.setSetpoint(scoringDistance);
         distanceController.setTolerance(DISTANCE_TOLERANCE_REEF_ALIGNMENT);
+        distanceController.setIntegratorRange(-0.8, 0.8); // Limit integral windup
      
-        rotController = new PIDController(ROT_REEF_ALIGNMENT_KP, 0, 0); // +CCW/-CW rotation
+        rotController = new PIDController(ROT_REEF_ALIGNMENT_KP, ROT_REEF_ALIGNMENT_KI, 0); // +CCW/-CW rotation
         rotController.setSetpoint(scoringAngle);
         rotController.setTolerance(ROT_TOLERANCE_REEF_ALIGNMENT);
         rotController.enableContinuousInput(0., Math.PI*2.);
+        rotController.setIntegratorRange(-0.8, 0.8); // Limit integral windup
     }
 
     public void initialize()
@@ -92,7 +106,11 @@ public class AlignToReefTagRelativeArcade2D extends Command {
         holdPoseValidationTimer.start();
         dontSeeTagTimer = new Timer();
         dontSeeTagTimer.start();
-        bail = false; 
+        lastPoseTimer = new Timer();
+        lastPoseTimer.start();
+        bail = false;
+        wasAtSetpoint = false;
+        lastKnownPose = null;
         distanceController.reset();
         rotController.reset();
       }
@@ -100,18 +118,31 @@ public class AlignToReefTagRelativeArcade2D extends Command {
     public void execute()
     {
          RobotPose pose;
+         boolean usingLastKnownPose = false;
 
         if (visionContainer.getRobotPose().isPresent())
         { // see a tag so reset countdown to failure timer and process this iteration
           pose = visionContainer.getRobotPose().get();
-          dontSeeTagTimer.reset();      
+          dontSeeTagTimer.reset();
+          lastKnownPose = pose; // Store as last known good pose
+          lastPoseTimer.reset(); // Reset timer for last pose usage
         }
         else
-        { // no tag seen so let the countdown to failure timer run and quit this iteration
-          return;
+        { // no tag seen - try to use last known pose if available and recent
+          if (lastKnownPose != null && lastPoseTimer.get() < LAST_POSE_TIMEOUT)
+          {
+            pose = lastKnownPose;
+            usingLastKnownPose = true;
+            // Don't reset dontSeeTagTimer - let it continue counting
+          }
+          else
+          { // No recent pose available, quit this iteration
+            return;
+          }
         }
  
-        if (pose.AprilTagId != tagIDDesired) // make sure still looking at the correct tag
+        // Only check tag ID if we have fresh vision (not using last known pose)
+        if (!usingLastKnownPose && pose.AprilTagId != tagIDDesired) // make sure still looking at the correct tag
         {
             System.out.println("Oops! Looking at wrong tag" + pose.AprilTagId);
             bail = true;
@@ -119,19 +150,71 @@ public class AlignToReefTagRelativeArcade2D extends Command {
         }    
   
         // get the camera frame pose information
-        var targetPitch = pose.pitch;
-        var targetYaw = pose.yaw;
-        // robot to camera pitch convention in this project is "-" is camera pointing up and "+" is down.
-        // the distanceToTarget() uses the opposite sign so flip it here
-        var distanceToTarget = distanceToTarget(cameraHeight, targetHeight, -cameraPitch, Units.degreesToRadians(targetPitch));
-        // controlling the pitch could be used directly instead of converting to distance but best practice is
-        // to work in the engineering units that are familiar for the problem being solved:
-        // Degrees of tilt? Not obvious and changeable with mounting. Meters of distance? Clear and invariant.
-        System.out.println("angle error " + (scoringAngle - targetYaw) +
+        var targetPitch = pose.pitch; // degrees
+        var targetYaw = pose.yaw; // degrees - must convert to radians for PID controller
+        
+        // Use 3D distance from cameraToTarget transform (more accurate than pitch-based calculation)
+        // cameraToTarget.getX() is the forward distance from camera to tag in meters
+        // This is more accurate than calculating from pitch, especially with small height differences
+        var distanceToTarget = pose.cameraToTarget.getX();
+        
+        // Fallback to pitch-based calculation if 3D distance is not available (shouldn't happen, but safety check)
+        if (distanceToTarget <= 0 || !Double.isFinite(distanceToTarget)) {
+            // robot to camera pitch convention in this project is "-" is camera pointing up and "+" is down.
+            // the distanceToTarget() uses the opposite sign so flip it here
+            distanceToTarget = distanceToTarget(cameraHeight, targetHeight, -cameraPitch, Units.degreesToRadians(targetPitch));
+        }
+        
+        // Convert yaw from degrees to radians for PID controller (setpoint is in radians)
+        double targetYawRadians = Units.degreesToRadians(targetYaw);
+        
+        System.out.println("angle error " + (scoringAngle - targetYawRadians) +
                            ", distance error " + (scoringDistance - distanceToTarget));
 
-        distanceSpeed = distanceController.calculate(distanceToTarget);
-        rotSpeed = rotController.calculate(targetYaw);
+        // Because the distance is measured from robot to target, the PID controller must be reversed
+        // When distance is larger than desired (too far), we want to move forward (positive speed)
+        // PID calculates negative output when too far, so we negate it
+        double baseDistanceSpeed = -distanceController.calculate(distanceToTarget);
+        double baseRotSpeed = rotController.calculate(targetYawRadians);
+        
+        double distanceError = scoringDistance - distanceToTarget;
+        double rotError = scoringAngle - targetYawRadians;
+        // Handle continuous rotation error wrap-around
+        if (Math.abs(rotError) > Math.PI) {
+            rotError = Math.copySign(2 * Math.PI - Math.abs(rotError), -rotError);
+        }
+        
+        // Apply minimum threshold to overcome friction/deadband when error is significant
+        // For distance: apply threshold if error exceeds tolerance OR if error is large (need more power)
+        if (Math.abs(distanceError) > DISTANCE_TOLERANCE_REEF_ALIGNMENT) {
+            // For large errors, use a higher minimum threshold to ensure movement
+            double effectiveMinThreshold = MIN_OUTPUT_THRESHOLD;
+            if (Math.abs(distanceError) > 0.5) {
+                effectiveMinThreshold = 0.35; // Higher threshold for large errors
+            } else if (Math.abs(distanceError) > 0.2) {
+                effectiveMinThreshold = 0.3; // Medium threshold for medium errors
+            }
+            
+            if (Math.abs(baseDistanceSpeed) < effectiveMinThreshold) {
+                distanceSpeed = Math.copySign(effectiveMinThreshold, baseDistanceSpeed);
+            } else {
+                distanceSpeed = baseDistanceSpeed;
+            }
+        } else {
+            distanceSpeed = baseDistanceSpeed;
+        }
+        
+        // For rotation: apply threshold if rotation error exceeds tolerance
+        if (Math.abs(rotError) > ROT_TOLERANCE_REEF_ALIGNMENT) {
+            if (Math.abs(baseRotSpeed) < MIN_OUTPUT_THRESHOLD) {
+                rotSpeed = Math.copySign(MIN_OUTPUT_THRESHOLD, baseRotSpeed);
+            } else {
+                rotSpeed = baseRotSpeed;
+            }
+        } else {
+            rotSpeed = baseRotSpeed;
+        }
+        
         // This rotation calculate() uses the camera which generally is slow to respond
         // (limelight claims to the contrary not withstanding).
         // Generally it's superior to use the PID controller on the gyro reading. The PID
@@ -155,22 +238,33 @@ public class AlignToReefTagRelativeArcade2D extends Command {
 
     public boolean isFinished()
     {
-        if (rotController.atSetpoint() &&
-            distanceController.atSetpoint()) {
+        // Check if we're at the setpoint
+        boolean atSetpoint = rotController.atSetpoint() &&
+                            distanceController.atSetpoint();
+
+        if (atSetpoint) {
             // at goal pose so stop and see if it settles
             // Two examples of how to drive - pick one way - maybe not either but what your drivetrain requires
             drivetrain.arcadeDrive(0, 0, false);
             drivetrain.driveRobotRelative(new ChassisSpeeds(0, 0, 0));
+            
+            // If we just reached setpoint (transition), reset the timer to start counting
+            if (!wasAtSetpoint) {
+                holdPoseValidationTimer.reset();
+                wasAtSetpoint = true;
+            }
         }
         else {
             // Two examples of how to drive - pick one way - maybe not either but what your drivetrain requires
             drivetrain.arcadeDrive(distanceSpeed, rotSpeed, false);
             drivetrain.driveRobotRelative(new ChassisSpeeds(distanceSpeed, 0., rotSpeed));
             holdPoseValidationTimer.reset();
+            wasAtSetpoint = false;
         }
 
         var dontSeeTag = dontSeeTagTimer.hasElapsed(DONT_SEE_TAG_WAIT_TIME);
-        var holdPose = holdPoseValidationTimer.hasElapsed(HOLD_POSE_VALIDATION_TIME);
+        // Only check holdPose timer when we're actually at setpoint
+        var holdPose = atSetpoint && holdPoseValidationTimer.hasElapsed(HOLD_POSE_VALIDATION_TIME);
 
         if (bail)
         {
