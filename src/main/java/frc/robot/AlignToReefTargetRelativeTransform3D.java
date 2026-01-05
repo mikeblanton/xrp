@@ -45,19 +45,20 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
   private int tagIDDesired;
 
   // PID constants
-  private static final double X_REEF_ALIGNMENT_KP = 1.;
-  private static final double X_REEF_ALIGNMENT_KI = 0.1; // Integral term to eliminate steady-state error
+  private static final double X_REEF_ALIGNMENT_KP = 1.2; // Slightly increased for better response
+  private static final double X_REEF_ALIGNMENT_KI = 0.15; // Increased integral to eliminate steady-state error
   private static final double Y_REEF_ALIGNMENT_KP = 1.;
   private static final double Y_REEF_ALIGNMENT_KI = 0.1; // Integral term to eliminate steady-state error
-  private static final double ROT_REEF_ALIGNMENT_KP = 1.;
-  private static final double ROT_REEF_ALIGNMENT_KI = 0.1; // Integral term to eliminate steady-state error
+  private static final double ROT_REEF_ALIGNMENT_KP = 1.2; // Slightly increased for rotation
+  private static final double ROT_REEF_ALIGNMENT_KI = 0.15; // Increased integral to eliminate steady-state error
 
-  private static final double X_TOLERANCE_REEF_ALIGNMENT = 0.06; // meters
-  private static final double Y_TOLERANCE_REEF_ALIGNMENT = 0.06; // meters
-  private static final double ROT_TOLERANCE_REEF_ALIGNMENT = Units.degreesToRadians(5.);
+  // Tighter tolerances - robot must be closer to target
+  private static final double X_TOLERANCE_REEF_ALIGNMENT = 0.05; // meters (5cm - tighter)
+  private static final double Y_TOLERANCE_REEF_ALIGNMENT = 0.05; // meters (5cm - tighter)
+  private static final double ROT_TOLERANCE_REEF_ALIGNMENT = Units.degreesToRadians(3.); // 3 degrees - tighter
   
   // Minimum output values to overcome friction and deadband
-  private static final double MIN_OUTPUT_THRESHOLD = 0.1;
+  private static final double MIN_OUTPUT_THRESHOLD = 0.12; // Slightly increased to ensure movement
 
   private PIDController xController;
   private PIDController yController;
@@ -90,11 +91,11 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
     // Simple example with one tag that has two similar scoring positions so take advantage of that symmetry
     tagIDDesired = 1; // example is short list that isn't even a list
 
-    // Target: 0.5 meters in front of tag, with tag centered in camera (Y=0), facing the tag
-    // X: 0.5m forward (tag is 0.5m in front of camera)
+    // Target: 0.75 meters in front of tag, with tag centered in camera (Y=0), facing the tag
+    // X: 0.75m forward (tag is 0.75m in front of camera)
     // Y: 0.0m centered (tag centered laterally in camera view)
     // Rotation: π radians (180°) - robot facing the tag
-    targetBranch = new Transform3d(0.5, 0.0, 0., new Rotation3d(0., 0., Math.PI));
+    targetBranch = new Transform3d(0.75, 0.0, 0., new Rotation3d(0., 0., Math.PI));
     // Note: isRightScore parameter is ignored since we want centered positioning
 
     target = targetBranch;
@@ -102,7 +103,7 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
     xController = new PIDController(X_REEF_ALIGNMENT_KP, X_REEF_ALIGNMENT_KI, 0); // +forward/-back translation
     xController.setSetpoint(target.getX());
     xController.setTolerance(X_TOLERANCE_REEF_ALIGNMENT);
-    xController.setIntegratorRange(-0.5, 0.5); // Limit integral windup
+    xController.setIntegratorRange(-0.8, 0.8); // Increased integrator range to allow more integral accumulation
 
     yController = new PIDController(Y_REEF_ALIGNMENT_KP, Y_REEF_ALIGNMENT_KI, 0); // +left/-right translation
     yController.setSetpoint(target.getY());
@@ -113,7 +114,7 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
     rotController.setSetpoint(target.getRotation().getZ());
     rotController.setTolerance(ROT_TOLERANCE_REEF_ALIGNMENT);
     rotController.enableContinuousInput(-Math.PI, Math.PI);
-    rotController.setIntegratorRange(-0.5, 0.5); // Limit integral windup
+    rotController.setIntegratorRange(-0.8, 0.8); // Increased integrator range to allow more integral accumulation
   }
 
   @Override
@@ -178,7 +179,8 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
     // For differential drive, Y (lateral) error must be converted to rotation
     // Add Y error correction to rotation: if tag is to the right (negative Y error),
     // rotate right (positive rotation). Scale to avoid overwhelming rotation control.
-    double yErrorCorrection = ySpeed * 0.5; // Scale Y correction so it doesn't dominate
+    // Use direct Y error instead of ySpeed for more stable control
+    double yErrorCorrection = yError * 0.3; // Convert Y error directly to rotation correction
     rotValue = baseRotValue + yErrorCorrection;
     
     // Debug: log PID outputs before applying minimum threshold
@@ -186,15 +188,18 @@ public class AlignToReefTargetRelativeTransform3D extends Command {
         xSpeed, ySpeed, rotValue, baseRotValue, yErrorCorrection,
         xController.atSetpoint(), yController.atSetpoint(), rotController.atSetpoint()));
     
-    // Apply minimum threshold to overcome friction/deadband, but only if not at setpoint
-    // This prevents overcorrection when very close to target
-    if (!xController.atSetpoint() && Math.abs(xSpeed) > 0 && Math.abs(xSpeed) < MIN_OUTPUT_THRESHOLD) {
+    // Apply minimum threshold to overcome friction/deadband when error is significant
+    // Check actual errors, not just setpoint status, to keep driving when close but not quite there
+    if (Math.abs(xError) > X_TOLERANCE_REEF_ALIGNMENT && Math.abs(xSpeed) > 0 && Math.abs(xSpeed) < MIN_OUTPUT_THRESHOLD) {
       xSpeed = Math.copySign(MIN_OUTPUT_THRESHOLD, xSpeed);
     }
-    if (!yController.atSetpoint() && Math.abs(ySpeed) > 0 && Math.abs(ySpeed) < MIN_OUTPUT_THRESHOLD) {
-      ySpeed = Math.copySign(MIN_OUTPUT_THRESHOLD, ySpeed);
+    // Y speed is converted to rotation, so don't apply threshold here
+    // Check rotation error (accounting for wrap-around)
+    double absRotError = Math.abs(rotError);
+    if (absRotError > Math.PI) {
+      absRotError = 2 * Math.PI - absRotError;
     }
-    if (!rotController.atSetpoint() && Math.abs(rotValue) > 0 && Math.abs(rotValue) < MIN_OUTPUT_THRESHOLD) {
+    if (absRotError > ROT_TOLERANCE_REEF_ALIGNMENT && Math.abs(rotValue) > 0 && Math.abs(rotValue) < MIN_OUTPUT_THRESHOLD) {
       rotValue = Math.copySign(MIN_OUTPUT_THRESHOLD, rotValue);
     }
     
